@@ -1,0 +1,64 @@
+pipeline {
+    agent any
+    
+    environment {
+        AWS_ACCOUNT_ID = credentials('AWS_ACCOUNT_ID')
+        AWS_ACCESS_KEY_ID = credentials('AWS_ACCESS_KEY_ID')
+        AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
+        ECR_REPOSITORY = 'student-list-app'
+        ECR_REGION = 'us-east-2'
+        EC2_HOST = 'ec2-3-145-156-252.us-east-2.compute.amazonaws.com'
+    }
+    
+    stages {
+        stage('Build') {
+            steps {
+                sh 'docker-compose build'
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                sh 'docker-compose up -d'
+                sh 'sleep 10'
+                sh 'curl -f http://localhost:5000/students || exit 1'
+                sh 'docker-compose down'
+            }
+        }
+        
+        stage('Login to Amazon ECR') {
+            steps {
+                sh 'aws ecr get-login-password --region ${ECR_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com'
+            }
+        }
+        
+        stage('Push to ECR') {
+            steps {
+                sh '''
+                    docker tag student-list-api:latest ${AWS_ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
+                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
+                '''
+            }
+        }
+        
+        stage('Deploy') {
+            steps {
+                sh '''
+                    aws ecs update-service --cluster student-list-cluster --service student-list-service --force-new-deployment --region ${ECR_REGION}
+                '''
+            }
+        }
+    }
+    
+    post {
+        always {
+            sh 'docker-compose down'
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed!'
+        }
+    }
+} 
